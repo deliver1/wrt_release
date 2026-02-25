@@ -56,8 +56,9 @@ jobs:
       - name: Pre Clone
         run: ./wrt_release/pre_clone_action.sh ${{ inputs.model }}
 
+      # 修复了 image_f94d75.png 中的版本废弃报错
       - name: Cache Dependencies
-        uses: actions/cache@v4.0.2
+        uses: actions/cache@v4
         with:
           path: |
             .action_build/staging_dir
@@ -70,13 +71,12 @@ jobs:
         run: |
           [ -d ".action_build/staging_dir" ] && find ".action_build/staging_dir" -type d -name "stamp" -not -path "*/target/*" | while read -r dir; do find "$dir" -type f -exec touch {} + ; done
 
-      # --- 关键新增步骤：修复 GCC 14 编译 libubox 报错 ---
+      # 关键新增：修复 image_fa507e.png 中的 GCC 14 编译 libubox 报错
       - name: Patch libubox for GCC 14
         run: |
-          # 找到 libubox 的 Makefile 并添加忽略警告的参数
           if [ -d "package/libs/libubox" ]; then
+            echo "Applying patch for libubox on GCC 14..."
             sed -i 's/TARGET_CFLAGS += /TARGET_CFLAGS += -Wno-error=format-nonliteral /' package/libs/libubox/Makefile
-            echo "libubox patch applied."
           fi
 
       - name: Build Firmware
@@ -84,12 +84,10 @@ jobs:
 
       - name: Get Kernel Version
         run: |
-          # 自动获取内核版本
           echo "KERNEL_VERSION=$(grep -oP '(?<=LINUX_VERSION:=).*' include/kernel-defaults.mk || echo 'unknown')" >> $GITHUB_ENV
 
       - name: Delete Old Cache
         run: |
-          # 清理旧缓存逻辑（参考你图片中的内容）
           gh cache list --key ${{ matrix.os }}-build-${{ hashFiles('**/repo_flag') }}- --json key --jq '.[].key' | while read -r key; do gh cache delete "$key"; done || true
 
       - name: Machine Information
@@ -101,7 +99,6 @@ jobs:
       - name: Package OpenWrt Firmware
         if: ${{ inputs.model == 'v2_immort' }}
         run: |
-          # 根据你的逻辑进行打包
           tar -cvf firmware.tar bin/targets/
 
       - name: Prepare Release Body
@@ -110,7 +107,7 @@ jobs:
           echo "内核版本：${{ env.KERNEL_VERSION }}" >> release_body.txt
 
       - name: Release Firmware
-        uses: softprops/action-gh-release@v2.0.4
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.BUILD_DATE }}-${{ inputs.model }}
           files: |
