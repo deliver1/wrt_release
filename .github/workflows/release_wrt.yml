@@ -7,7 +7,7 @@ on:
       model:
         description: 'Device Model'
         required: true
-        default: 'redmi_ax6_immortal'
+        default: 'redmi_ax6_libwrt'
         type: choice
         options:
           - 'redmi_ax6_immortal'
@@ -22,11 +22,12 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [ubuntu-24.04]
+        # 1. 改用 22.04，避开 GCC 14 的 libubox 编译报错 [修复 image_fa507e.png]
+        os: [ubuntu-22.04]
     runs-on: ${{ matrix.os }}
 
     steps:
-      # 1. 必须先检出代码，否则后面所有脚本都找不到 [修复 image_e9d8d8.png]
+      # 2. 检出代码 [修复 image_e9d8d8.png]
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -47,11 +48,19 @@ jobs:
           sudo timedatectl set-timezone "Asia/Shanghai"
           echo "BUILD_DATE=$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_ENV
 
-      # 现在有代码了，这一步就不会报错了
+      # 3. 修正路径：根据 image_de8b17.png，脚本在 wrt_core 目录下
       - name: Pre Clone
-        run: chmod +x ./wrt_release/pre_clone_action.sh && ./wrt_release/pre_clone_action.sh ${{ inputs.model }}
+        run: |
+          if [ -f "./wrt_core/pre_clone_action.sh" ]; then
+            chmod +x ./wrt_core/pre_clone_action.sh
+            ./wrt_core/pre_clone_action.sh ${{ inputs.model }}
+          else
+            echo "错误：在 wrt_core 目录下找不到 pre_clone_action.sh！"
+            ls -R # 打印当前目录结构方便排查
+            exit 1
+          fi
 
-      # 使用 v4 版本修复 image_f94d75.png 的废弃报错
+      # 4. 使用 v4 缓存，修复过时警告 [修复 image_f94d75.png]
       - name: Cache Dependencies
         uses: actions/cache@v4
         with:
@@ -66,16 +75,11 @@ jobs:
         run: |
           [ -d ".action_build/staging_dir" ] && find ".action_build/staging_dir" -type d -name "stamp" -not -path "*/target/*" | while read -r dir; do find "$dir" -type f -exec touch {} + ; done
 
-      # 2. 核心补丁：修复 image_fa507e.png 中的 GCC 14 编译报错
-      - name: Patch libubox for GCC 14
-        run: |
-          if [ -d "package/libs/libubox" ]; then
-            echo "正在为 GCC 14 修复 libubox..."
-            sed -i 's/TARGET_CFLAGS += /TARGET_CFLAGS += -Wno-error=format-nonliteral /' package/libs/libubox/Makefile
-          fi
-
+      # 5. 编译固件 [build.sh 在根目录，见 image_de8b4d.png]
       - name: Build Firmware
-        run: chmod +x build.sh && ./build.sh ${{ inputs.model }}
+        run: |
+          chmod +x build.sh
+          ./build.sh ${{ inputs.model }}
 
       - name: Get Kernel Version
         run: |
