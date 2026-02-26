@@ -5,28 +5,18 @@ on:
   workflow_dispatch:
     inputs:
       model:
+        description: 'Device Model'
         required: true
-        description: Device Model
+        default: 'redmi_ax6_immortal'
         type: choice
-        default: jdcloud_ipq60xx_immwrt
         options:
-          - aliyun_ap8220_immwrt
-          - cmcc_rax3000m_immwrt
-          - gemtek_w1701k_immwrt
-          - jdcloud_ax6000_immwrt
-          - jdcloud_ipq60xx_immwrt
-          - jdcloud_ipq60xx_libwrt
-          - link_nn6000v2_immwrt
-          - linksys_mx4x00_immwrt
-          - n1_immwrt
-          - qihoo_360v6_immwrt
-          - redmi_ax5_immwrt
-          - redmi_ax6_immwrt
-          - redmi_ax6_libwrt
-          - redmi_ax6000_immwrt21
-          - zn_m2_immwrt
-          - zn_m2_libwrt
-          - x64_immwrt
+          - 'redmi_ax6_immortal'
+          - 'redmi_ax6_native'
+          - 'v2_immort'
+          - 'redmi_ax6_libwrt'
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
   build:
@@ -36,6 +26,10 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
+      # 1. 必须先检出代码，否则后面所有脚本都找不到 [修复 image_e9d8d8.png]
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Free disk space
         uses: jlumbroso/free-disk-space@main
         with:
@@ -53,10 +47,11 @@ jobs:
           sudo timedatectl set-timezone "Asia/Shanghai"
           echo "BUILD_DATE=$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_ENV
 
+      # 现在有代码了，这一步就不会报错了
       - name: Pre Clone
-        run: ./wrt_release/pre_clone_action.sh ${{ inputs.model }}
+        run: chmod +x ./wrt_release/pre_clone_action.sh && ./wrt_release/pre_clone_action.sh ${{ inputs.model }}
 
-      # 修复了 image_f94d75.png 中的版本废弃报错
+      # 使用 v4 版本修复 image_f94d75.png 的废弃报错
       - name: Cache Dependencies
         uses: actions/cache@v4
         with:
@@ -71,16 +66,16 @@ jobs:
         run: |
           [ -d ".action_build/staging_dir" ] && find ".action_build/staging_dir" -type d -name "stamp" -not -path "*/target/*" | while read -r dir; do find "$dir" -type f -exec touch {} + ; done
 
-      # 关键新增：修复 image_fa507e.png 中的 GCC 14 编译 libubox 报错
+      # 2. 核心补丁：修复 image_fa507e.png 中的 GCC 14 编译报错
       - name: Patch libubox for GCC 14
         run: |
           if [ -d "package/libs/libubox" ]; then
-            echo "Applying patch for libubox on GCC 14..."
+            echo "正在为 GCC 14 修复 libubox..."
             sed -i 's/TARGET_CFLAGS += /TARGET_CFLAGS += -Wno-error=format-nonliteral /' package/libs/libubox/Makefile
           fi
 
       - name: Build Firmware
-        run: ./build.sh ${{ inputs.model }}
+        run: chmod +x build.sh && ./build.sh ${{ inputs.model }}
 
       - name: Get Kernel Version
         run: |
