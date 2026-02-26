@@ -22,6 +22,7 @@ jobs:
   build:
     strategy:
       matrix:
+        # 保持 22.04 避开 GCC 14 的编译报错
         os: [ubuntu-22.04]
     runs-on: ${{ matrix.os }}
 
@@ -74,10 +75,9 @@ jobs:
           chmod +x build.sh
           ./build.sh ${{ inputs.model }}
 
-      # --- 改进 1：更稳健的内核版本抓取逻辑 ---
+      # --- 修复 1：在所有子目录下搜索内核版本 [解决 image_dad991.png 的 unknown 问题] ---
       - name: Get Kernel Version
         run: |
-          # 寻找并提取内核版本，去除潜在的空格和回车
           VERSION_FILE=$(find . -name "kernel-defaults.mk" | head -n 1)
           if [ -n "$VERSION_FILE" ]; then
             K_VER=$(grep -E "^LINUX_VERSION:=" "$VERSION_FILE" | cut -d'=' -f2 | tr -d ' ')
@@ -90,12 +90,22 @@ jobs:
         run: |
           gh cache list --key ${{ matrix.os }}-build-${{ hashFiles('**/repo_flag') }}- --json key --jq '.[].key' | while read -r key; do gh cache delete "$key"; done || true
 
+      # --- 修复 2：恢复 Release 信息 [移除 WiFi，找回插件列表] ---
       - name: Prepare Release Body
         run: |
+          CONFIG_FILE=$(find . -name ".config" | head -n 1)
           echo "编译完成时间：$(date +'%Y-%m-%d %H:%M')" > release_body.txt
           echo "内核版本：${{ env.KERNEL_VERSION }}" >> release_body.txt
+          echo "源码地址：https://github.com/deliver1/openwrt-6.x.git" >> release_body.txt
+          echo "LAN地址：192.168.10.1" >> release_body.txt
+          echo "提示：此版本为无 WiFi 优化版" >> release_body.txt
+          
+          if [ -n "$CONFIG_FILE" ]; then
+            echo "已安装插件：" >> release_body.txt
+            grep "CONFIG_PACKAGE_luci-app-" "$CONFIG_FILE" | grep "=y" | cut -d'_' -f3- | cut -d'=' -f1 | sed 's/^/  - /' >> release_body.txt
+          fi
 
-      # --- 改进 2：新增 .ubi 和 .img 支持，上传所有可能的文件 ---
+      # --- 修复 3：上传所有镜像，包括 factory.ubi [解决 image_c1f9e1.png 的文件缺失] ---
       - name: Release Firmware
         uses: softprops/action-gh-release@v2
         with:
