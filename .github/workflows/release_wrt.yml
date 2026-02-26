@@ -22,7 +22,6 @@ jobs:
   build:
     strategy:
       matrix:
-        # 维持 22.04 避开 GCC 14 冲突
         os: [ubuntu-22.04]
     runs-on: ${{ matrix.os }}
 
@@ -75,12 +74,14 @@ jobs:
           chmod +x build.sh
           ./build.sh ${{ inputs.model }}
 
-      # --- 改进 1：在所有子目录中搜寻内核版本文件 [解决 image_dad991.png 的 unknown 问题] ---
+      # --- 改进 1：更稳健的内核版本抓取逻辑 ---
       - name: Get Kernel Version
         run: |
+          # 寻找并提取内核版本，去除潜在的空格和回车
           VERSION_FILE=$(find . -name "kernel-defaults.mk" | head -n 1)
           if [ -n "$VERSION_FILE" ]; then
-            echo "KERNEL_VERSION=$(grep -oP '(?<=LINUX_VERSION:=).*' $VERSION_FILE)" >> $GITHUB_ENV
+            K_VER=$(grep -E "^LINUX_VERSION:=" "$VERSION_FILE" | cut -d'=' -f2 | tr -d ' ')
+            echo "KERNEL_VERSION=$K_VER" >> $GITHUB_ENV
           else
             echo "KERNEL_VERSION=unknown" >> $GITHUB_ENV
           fi
@@ -89,24 +90,20 @@ jobs:
         run: |
           gh cache list --key ${{ matrix.os }}-build-${{ hashFiles('**/repo_flag') }}- --json key --jq '.[].key' | while read -r key; do gh cache delete "$key"; done || true
 
-      # --- 调试步骤：看看文件到底在哪里 ---
-      - name: Check Artifacts Location
-        run: |
-          echo "正在搜索生成的固件..."
-          find . -name "*.bin" -o -name "*.img.gz"
-
       - name: Prepare Release Body
         run: |
           echo "编译完成时间：$(date +'%Y-%m-%d %H:%M')" > release_body.txt
           echo "内核版本：${{ env.KERNEL_VERSION }}" >> release_body.txt
 
-      # --- 改进 2：使用全局递归匹配，无论在哪个子目录都能抓到固件 [修复 image_dad991.png 的 Assets 为空] ---
+      # --- 改进 2：新增 .ubi 和 .img 支持，上传所有可能的文件 ---
       - name: Release Firmware
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.BUILD_DATE }}-${{ inputs.model }}
           files: |
             **/bin/targets/**/*.bin
+            **/bin/targets/**/*.img
             **/bin/targets/**/*.img.gz
+            **/bin/targets/**/*.ubi
             **/bin/targets/**/*.manifest
           body_path: release_body.txt
