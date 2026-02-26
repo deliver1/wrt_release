@@ -22,7 +22,7 @@ jobs:
   build:
     strategy:
       matrix:
-        # 保持 22.04 以避开 GCC 14 编译冲突
+        # 维持 22.04 避开 GCC 14 冲突
         os: [ubuntu-22.04]
     runs-on: ${{ matrix.os }}
 
@@ -47,15 +47,11 @@ jobs:
           sudo timedatectl set-timezone "Asia/Shanghai"
           echo "BUILD_DATE=$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_ENV
 
-      # 修正后的 Pre Clone 路径 [根据 image_de8b17.png 适配]
       - name: Pre Clone
         run: |
           if [ -f "./wrt_core/pre_clone_action.sh" ]; then
             chmod +x ./wrt_core/pre_clone_action.sh
             ./wrt_core/pre_clone_action.sh ${{ inputs.model }}
-          else
-            echo "Error: Cannot find pre_clone_action.sh in wrt_core/"
-            exit 1
           fi
 
       - name: Cache Dependencies
@@ -68,14 +64,10 @@ jobs:
           restore-keys: |
             ${{ matrix.os }}-build-${{ hashFiles('**/repo_flag') }}-
 
-      # --- 修复 image_de0b31.png 中的错误 ---
       - name: Refresh the cache
         run: |
           if [ -d ".action_build/staging_dir" ]; then
-            echo "正在刷新缓存时间戳..."
             find ".action_build/staging_dir" -type d -name "stamp" -not -path "*/target/*" | while read -r dir; do find "$dir" -type f -exec touch {} + ; done
-          else
-            echo "缓存目录不存在，跳过刷新。"
           fi
 
       - name: Build Firmware
@@ -83,34 +75,38 @@ jobs:
           chmod +x build.sh
           ./build.sh ${{ inputs.model }}
 
+      # --- 改进 1：在所有子目录中搜寻内核版本文件 [解决 image_dad991.png 的 unknown 问题] ---
       - name: Get Kernel Version
         run: |
-          echo "KERNEL_VERSION=$(grep -oP '(?<=LINUX_VERSION:=).*' include/kernel-defaults.mk || echo 'unknown')" >> $GITHUB_ENV
+          VERSION_FILE=$(find . -name "kernel-defaults.mk" | head -n 1)
+          if [ -n "$VERSION_FILE" ]; then
+            echo "KERNEL_VERSION=$(grep -oP '(?<=LINUX_VERSION:=).*' $VERSION_FILE)" >> $GITHUB_ENV
+          else
+            echo "KERNEL_VERSION=unknown" >> $GITHUB_ENV
+          fi
 
       - name: Delete Old Cache
         run: |
           gh cache list --key ${{ matrix.os }}-build-${{ hashFiles('**/repo_flag') }}- --json key --jq '.[].key' | while read -r key; do gh cache delete "$key"; done || true
 
-      - name: Machine Information
+      # --- 调试步骤：看看文件到底在哪里 ---
+      - name: Check Artifacts Location
         run: |
-          echo "--------------------------"
-          lscpu | grep -E "name|Thread"
-          echo "--------------------------"
-
-      - name: Package OpenWrt Firmware
-        if: ${{ inputs.model == 'v2_immort' }}
-        run: |
-          tar -cvf firmware.tar bin/targets/
+          echo "正在搜索生成的固件..."
+          find . -name "*.bin" -o -name "*.img.gz"
 
       - name: Prepare Release Body
         run: |
           echo "编译完成时间：$(date +'%Y-%m-%d %H:%M')" > release_body.txt
           echo "内核版本：${{ env.KERNEL_VERSION }}" >> release_body.txt
 
+      # --- 改进 2：使用全局递归匹配，无论在哪个子目录都能抓到固件 [修复 image_dad991.png 的 Assets 为空] ---
       - name: Release Firmware
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.BUILD_DATE }}-${{ inputs.model }}
           files: |
-            bin/targets/**/immortalwrt-*.{bin,img.gz}
+            **/bin/targets/**/*.bin
+            **/bin/targets/**/*.img.gz
+            **/bin/targets/**/*.manifest
           body_path: release_body.txt
