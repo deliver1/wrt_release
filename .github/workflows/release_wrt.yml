@@ -22,7 +22,6 @@ jobs:
   build:
     strategy:
       matrix:
-        # 保持 22.04 避开 GCC 14 的编译报错
         os: [ubuntu-22.04]
     runs-on: ${{ matrix.os }}
 
@@ -54,6 +53,16 @@ jobs:
             ./wrt_core/pre_clone_action.sh ${{ inputs.model }}
           fi
 
+      # --- 补丁步骤：修复 GCC 14 环境下的所有已知源码 bug ---
+      - name: Patch Sources for GCC 14
+        run: |
+          echo "正在应用源码补丁..."
+          # 修复 libubox 的格式化字符串检查错误
+          find . -name Makefile -path "*/libubox/*" -exec sed -i 's/TARGET_CFLAGS += /TARGET_CFLAGS += -Wno-error=format-nonliteral /' {} +
+          
+          # 修复 iproute2 缺少 limits.h 导致的 UINT_MAX 错误
+          find . -name utils_math.c -exec sed -i '1i#include <limits.h>' {} +
+
       - name: Cache Dependencies
         uses: actions/cache@v4
         with:
@@ -75,7 +84,6 @@ jobs:
           chmod +x build.sh
           ./build.sh ${{ inputs.model }}
 
-      # --- 修复 1：在所有子目录下搜索内核版本 [解决 image_dad991.png 的 unknown 问题] ---
       - name: Get Kernel Version
         run: |
           VERSION_FILE=$(find . -name "kernel-defaults.mk" | head -n 1)
@@ -90,7 +98,6 @@ jobs:
         run: |
           gh cache list --key ${{ matrix.os }}-build-${{ hashFiles('**/repo_flag') }}- --json key --jq '.[].key' | while read -r key; do gh cache delete "$key"; done || true
 
-      # --- 修复 2：恢复 Release 信息 [移除 WiFi，找回插件列表] ---
       - name: Prepare Release Body
         run: |
           CONFIG_FILE=$(find . -name ".config" | head -n 1)
@@ -98,22 +105,20 @@ jobs:
           echo "内核版本：${{ env.KERNEL_VERSION }}" >> release_body.txt
           echo "源码地址：https://github.com/deliver1/openwrt-6.x.git" >> release_body.txt
           echo "LAN地址：192.168.10.1" >> release_body.txt
-          echo "提示：此版本为无 WiFi 优化版" >> release_body.txt
+          echo "💡 特色：无 WiFi 极致精简版 | 针对 Redmi AX6 内存优化" >> release_body.txt
           
           if [ -n "$CONFIG_FILE" ]; then
-            echo "已安装插件：" >> release_body.txt
+            echo "已安装插件清单：" >> release_body.txt
             grep "CONFIG_PACKAGE_luci-app-" "$CONFIG_FILE" | grep "=y" | cut -d'_' -f3- | cut -d'=' -f1 | sed 's/^/  - /' >> release_body.txt
           fi
 
-      # --- 修复 3：上传所有镜像，包括 factory.ubi [解决 image_c1f9e1.png 的文件缺失] ---
       - name: Release Firmware
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.BUILD_DATE }}-${{ inputs.model }}
           files: |
             **/bin/targets/**/*.bin
-            **/bin/targets/**/*.img
-            **/bin/targets/**/*.img.gz
+            **/bin/targets/**/*.img*
             **/bin/targets/**/*.ubi
             **/bin/targets/**/*.manifest
           body_path: release_body.txt
