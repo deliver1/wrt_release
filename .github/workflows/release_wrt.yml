@@ -22,12 +22,11 @@ jobs:
   build:
     strategy:
       matrix:
-        # 使用 22.04 是最稳妥的选择，能避开 GCC 14 带来的大量源码兼容性报错
+        # 继续锁定 22.04 避开更多 GCC 14 的兼容性坑
         os: [ubuntu-22.04]
     runs-on: ${{ matrix.os }}
 
     steps:
-      # 1. 检出代码 (必须步骤)
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -48,7 +47,6 @@ jobs:
           sudo timedatectl set-timezone "Asia/Shanghai"
           echo "BUILD_DATE=$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_ENV
 
-      # 2. 预克隆脚本 (适配 wrt_core 路径)
       - name: Pre Clone
         run: |
           if [ -f "./wrt_core/pre_clone_action.sh" ]; then
@@ -56,16 +54,17 @@ jobs:
             ./wrt_core/pre_clone_action.sh ${{ inputs.model }}
           fi
 
-      # 3. 源码补丁：修复 iproute2 和 libubox 的编译 bug
+      # --- 关键补丁：修复 GCC 14 带来的 libubox 和 iproute2 错误 ---
       - name: Patch Sources
         run: |
-          echo "正在应用源码补丁以兼容编译器..."
-          # 修复 iproute2 缺少 limits.h 导致的 UINT_MAX 报错
-          find . -name utils_math.c -exec sed -i '1i#include <limits.h>' {} +
-          # 修复 libubox 的格式化字符串检查错误
+          echo "正在应用源码补丁以解决 GCC 14 兼容性问题..."
+          # 1. 修复 libubox 的格式化字符串检查错误
           find . -name Makefile -path "*/libubox/*" -exec sed -i 's/TARGET_CFLAGS += /TARGET_CFLAGS += -Wno-error=format-nonliteral /' {} +
+          
+          # 2. 修复 iproute2 缺少 limits.h 导致的 UINT_MAX 未定义错误
+          # 这行命令会在所有 utils_math.c 文件的开头插入 #include <limits.h>
+          find . -name utils_math.c -exec sed -i '1i#include <limits.h>' {} +
 
-      # 4. 依赖缓存 (已升级至 v4 版本)
       - name: Cache Dependencies
         uses: actions/cache@v4
         with:
@@ -82,13 +81,11 @@ jobs:
             find ".action_build/staging_dir" -type d -name "stamp" -not -path "*/target/*" | while read -r dir; do find "$dir" -type f -exec touch {} + ; done
           fi
 
-      # 5. 执行正式编译
       - name: Build Firmware
         run: |
           chmod +x build.sh
           ./build.sh ${{ inputs.model }}
 
-      # 6. 获取内核版本 (使用递归搜索适配子目录)
       - name: Get Kernel Version
         run: |
           VERSION_FILE=$(find . -name "kernel-defaults.mk" | head -n 1)
@@ -103,7 +100,6 @@ jobs:
         run: |
           gh cache list --key ${{ matrix.os }}-build-${{ hashFiles('**/repo_flag') }}- --json key --jq '.[].key' | while read -r key; do gh cache delete "$key"; done || true
 
-      # 7. 准备 Release 描述 (移除 WiFi 描述，增加内存优化说明)
       - name: Prepare Release Body
         run: |
           CONFIG_FILE=$(find . -name ".config" | head -n 1)
@@ -111,14 +107,13 @@ jobs:
           echo "内核版本：${{ env.KERNEL_VERSION }}" >> release_body.txt
           echo "源码地址：https://github.com/deliver1/openwrt-6.x.git" >> release_body.txt
           echo "LAN地址：192.168.10.1" >> release_body.txt
-          echo "💡 特色：无 WiFi 精简版 | 已集成 zram-swap & earlyoom" >> release_body.txt
+          echo "💡 特色：无 WiFi 精简版 | 针对 Redmi AX6 内存稳定性优化" >> release_body.txt
           
           if [ -n "$CONFIG_FILE" ]; then
             echo "已安装插件清单：" >> release_body.txt
             grep "CONFIG_PACKAGE_luci-app-" "$CONFIG_FILE" | grep "=y" | cut -d'_' -f3- | cut -d'=' -f1 | sed 's/^/  - /' >> release_body.txt
           fi
 
-      # 8. 发布 Release 并上传所有固件 (包含 factory.ubi)
       - name: Release Firmware
         uses: softprops/action-gh-release@v2
         with:
